@@ -72,16 +72,7 @@ def get_readable_file_size(size_in_bytes) -> str:
 def getDownloadByGid(gid):
     with download_dict_lock:
         for dl in list(download_dict.values()):
-            status = dl.status()
-            if (
-                status
-                not in [
-                    MirrorStatus.STATUS_ARCHIVING,
-                    MirrorStatus.STATUS_EXTRACTING,
-                    MirrorStatus.STATUS_SPLITTING,
-                ]
-                and dl.gid() == gid
-            ):
+            if dl.gid() == gid:
                 return dl
     return None
 
@@ -89,20 +80,31 @@ def getAllDownload(req_status: str):
     with download_dict_lock:
         for dl in list(download_dict.values()):
             status = dl.status()
-            if status not in [MirrorStatus.STATUS_ARCHIVING, MirrorStatus.STATUS_EXTRACTING, MirrorStatus.STATUS_SPLITTING] and dl:
-                if req_status == 'down' and (status not in [MirrorStatus.STATUS_SEEDING,
-                                                            MirrorStatus.STATUS_UPLOADING,
-                                                            MirrorStatus.STATUS_CLONING]):
-                    return dl
-                elif req_status == 'up' and status == MirrorStatus.STATUS_UPLOADING:
-                    return dl
-                elif req_status == 'clone' and status == MirrorStatus.STATUS_CLONING:
-                    return dl
-                elif req_status == 'seed' and status == MirrorStatus.STATUS_SEEDING:
-                    return dl
-                elif req_status == 'all':
-                    return dl
+            if req_status in ['all', status]:
+                return dl
     return None
+
+def bt_selection_buttons(id_: str):
+    if len(id_) > 20:
+        gid = id_[:12]
+    else:
+        gid = id_
+
+    pincode = ""
+    for n in id_:
+        if n.isdigit():
+            pincode += str(n)
+        if len(pincode) == 4:
+            break
+
+    buttons = ButtonMaker()
+    if WEB_PINCODE:
+        buttons.buildbutton("Select Files", f"{BASE_URL}/app/files/{id_}")
+        buttons.sbutton("Pincode", f"btsel pin {gid} {pincode}")
+    else:
+        buttons.buildbutton("Select Files", f"{BASE_URL}/app/files/{id_}?pin_code={pincode}")
+    buttons.sbutton("Done Selecting", f"btsel done {gid} {id_}")
+    return InlineKeyboardMarkup(buttons.build_menu(2))
 
 def get_progress_bar_string(status):
     completed = status.processed_bytes() / 8
@@ -127,13 +129,13 @@ def get_readable_message():
                 globals()['COUNT'] -= STATUS_LIMIT
                 globals()['PAGE_NO'] -= 1
         for index, download in enumerate(list(download_dict.values())[COUNT:], start=1):
-            msg += f"\n\n<b>File Name:</b> <code>{escape(str(download.name()))}</code>"
+            msg += f"<b>Name:</b> <code>{escape(str(download.name()))}</code>"
             msg += f"\n<b>Status:</b> <i>{download.status()}</i>"
-            if download.status() not in [MirrorStatus.STATUS_SEEDING]:
-                msg += f"\n{get_progress_bar_string(download)}\n<b>Progress:</b> {download.progress()}"
+            if download.status() not in [MirrorStatus.STATUS_SPLITTING, MirrorStatus.STATUS_SEEDING]:
+                msg += f"\n{get_progress_bar_string(download)} {download.progress()}"
                 if download.status() in [MirrorStatus.STATUS_DOWNLOADING,
                                          MirrorStatus.STATUS_WAITING,
-                                         MirrorStatus.STATUS_PAUSE]:
+                                         MirrorStatus.STATUS_PAUSED]:
                     msg += f"\n<b>Downloaded:</b> {get_readable_file_size(download.processed_bytes())} of {download.size()}"
                 elif download.status() == MirrorStatus.STATUS_UPLOADING:
                     msg += f"\n<b>Uploaded:</b> {get_readable_file_size(download.processed_bytes())} of {download.size()}"
@@ -143,11 +145,7 @@ def get_readable_message():
                     msg += f"\n<b>Archived:</b> {get_readable_file_size(download.processed_bytes())} of {download.size()}"
                 elif download.status() == MirrorStatus.STATUS_EXTRACTING:
                     msg += f"\n<b>Extracted:</b> {get_readable_file_size(download.processed_bytes())} of {download.size()}"
-                elif download.status() == MirrorStatus.STATUS_SPLITTING:
-                    msg += f"\n<b>Splitted:</b> {get_readable_file_size(download.processed_bytes())} of {download.size()}"
-                msg += f"\n<b>Speed:</b> {download.speed()}\n<b>Waiting Time:</b> {download.eta()}"
-                msg += f"\n<b>Elapsed : </b>{get_readable_time(time() - download.message.date.timestamp())}"
-                msg += f'\n<b>Req By :</b> <a href="https://t.me/c/{str(download.message.chat.id)[4:]}/{download.message.message_id}">{download.message.from_user.first_name}</a>'
+                msg += f"\n<b>Speed:</b> {download.speed()} | <b>ETA:</b> {download.eta()}"
                 try:
                     msg += f"\n<b>Seeders:</b> {download.aria_download().num_seeders}" \
                            f" | <b>Peers:</b> {download.aria_download().connections}"
@@ -158,18 +156,15 @@ def get_readable_message():
                            f" | <b>Leechers:</b> {download.torrent_info().num_leechs}"
                 except:
                     pass
-
             elif download.status() == MirrorStatus.STATUS_SEEDING:
                 msg += f"\n<b>Size: </b>{download.size()}"
-                msg += f"\n<b>Engine:</b> <code>qBittorrent v4.4.2</code>"
                 msg += f"\n<b>Speed: </b>{get_readable_file_size(download.torrent_info().upspeed)}/s"
                 msg += f" | <b>Uploaded: </b>{get_readable_file_size(download.torrent_info().uploaded)}"
                 msg += f"\n<b>Ratio: </b>{round(download.torrent_info().ratio, 3)}"
                 msg += f" | <b>Time: </b>{get_readable_time(download.torrent_info().seeding_time)}"
             else:
                 msg += f"\n<b>Size: </b>{download.size()}"
-                msg += f"\n<b>Engine :</b> {download.eng()}"
-            msg += f"\n<b>To Cancel: </b><code>/{BotCommands.CancelMirror} {download.gid()}</code>"
+            msg += f"\n<code>/{BotCommands.CancelMirror} {download.gid()}</code>"
             msg += "\n"
             if STATUS_LIMIT is not None and index == STATUS_LIMIT:
                 break
